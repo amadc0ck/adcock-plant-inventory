@@ -1,0 +1,12 @@
+# Google OAuth client secret — must never be committed
+secrets/
+
+# Ad-hoc API dumps from debugging sessions; may contain tokens
+response*.json
+
+# Supabase CLI scratch state — machine-local, and pooler-url is a Postgres
+# connection string
+supabase/.temp/
+
+.DS_Store
+.vscode/
