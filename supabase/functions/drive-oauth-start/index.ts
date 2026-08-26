@@ -9,7 +9,15 @@ export default {
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: "code",
-      scope: "https://www.googleapis.com/auth/drive.file",
+      // drive.file  — per-file access to files this app creates. Never the
+      //               user's wider Drive; see REFERENCE.md section 8.
+      // photospicker — read the media items the user explicitly picks in the
+      //               Google Photos picker. Bulk library access was removed on
+      //               2025-03-31, so this is the only route in (PHOTOS-1).
+      scope: [
+        "https://www.googleapis.com/auth/drive.file",
+        "https://www.googleapis.com/auth/photospicker.mediaitems.readonly",
+      ].join(" "),
       access_type: "offline",  // required to receive a refresh_token
       prompt: "consent",       // forces Google to issue a fresh refresh_token every time
     });
