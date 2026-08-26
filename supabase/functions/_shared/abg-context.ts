@@ -42,8 +42,12 @@ export async function buildContext(db: Db): Promise<AbgContext> {
     db.from("taxa").select("id,botanical_name,common_name,genus,species_epithet,cultivar,is_hybrid,working_label"),
     db.from("plants").select("id,accession_number,taxa_id,location_id,status"),
     db.from("locations").select("id,name,parent_location_id,type,holds_plants,gallery_row,archived"),
+    // Wrapped: before the suggestions migration runs this table does not
+    // exist, and letting that failure propagate would break the whole call for
+    // a nice-to-have. The examples are an improvement, not a prerequisite.
     db.from("suggestions").select("kind,status,rationale,value_text")
-      .in("status", ["accepted", "dismissed"]).order("created_at", { ascending: false }).limit(20),
+      .in("status", ["accepted", "dismissed"]).order("created_at", { ascending: false }).limit(20)
+      .then((r: { data: unknown }) => r, () => ({ data: [] })),
   ]);
 
   const taxaRows = taxaRes.data || [];

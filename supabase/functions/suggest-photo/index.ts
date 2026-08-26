@@ -131,7 +131,17 @@ export default {
       return Response.json({ success: true, suggestions: [], note: "Claude found nothing it could match with confidence." });
     }
     const { data, error } = await ctx.supabase.from("suggestions").insert(rows).select();
-    if (error) return Response.json({ error: error.message }, { status: 500 });
+    if (error) {
+      // The commonest first-run failure by a distance: the code deployed, the
+      // migration did not. Say which statement is missing rather than echoing
+      // "relation does not exist" nine times.
+      const missing = /does not exist|schema cache|PGRST205/i.test(error.message);
+      return Response.json({
+        error: missing
+          ? "The suggestions table does not exist yet — run the CREATE TABLE from BACKLOG v1.80.0, then: notify pgrst, 'reload schema';"
+          : error.message,
+      }, { status: 500 });
+    }
     return Response.json({ success: true, suggestions: data, usage: (claudeData as any).usage || null });
   }),
 };

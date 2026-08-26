@@ -89,7 +89,14 @@ export default {
       return Response.json({ success: true, suggestions: [], note: "Claude was not confident enough about any of the blanks." });
     }
     const { data, error: insErr } = await ctx.supabase.from("suggestions").insert(rows).select();
-    if (insErr) return Response.json({ error: insErr.message }, { status: 500 });
+    if (insErr) {
+      const missing = /does not exist|schema cache|PGRST205/i.test(insErr.message);
+      return Response.json({
+        error: missing
+          ? "The suggestions table does not exist yet — run the CREATE TABLE from BACKLOG v1.80.0, then: notify pgrst, 'reload schema';"
+          : insErr.message,
+      }, { status: 500 });
+    }
     return Response.json({ success: true, suggestions: data });
   }),
 };
