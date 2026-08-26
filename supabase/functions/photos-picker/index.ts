@@ -134,9 +134,8 @@ export default {
         return Response.json({ error: `Drive upload failed: ${JSON.stringify(uploadResult)}` }, { status: 500 });
       }
 
-      const { data: photoRow, error: dbError } = await ctx.supabase
-        .from("photos")
-        .insert({
+      // Built once so it can be retried without the dedupe column below.
+      const row: Record<string, unknown> = {
           drive_file_id: uploadResult.id,
           // Straight from the API — the time the photo was taken, not uploaded.
           // No EXIF parsing, which is why HEIC originals are not a problem here.
@@ -147,9 +146,23 @@ export default {
           // lets a later import skip anything already brought in. A partial
           // unique index backstops it if two runs race.
           google_photos_id: mediaItemId || null,
-        })
-        .select()
-        .single();
+      };
+
+      let { data: photoRow, error: dbError } = await ctx.supabase
+        .from("photos").insert(row).select().single();
+
+      // PGRST204 means PostgREST has no such column — the app shipped ahead of
+      // its migration. Import the photo anyway rather than failing every single
+      // one; it just loses dedupe until the column exists. A hard dependency on
+      // a new column turned a missed migration into a total import failure.
+      if (dbError && (dbError.code === "PGRST204" || /google_photos_id/.test(dbError.message || ""))) {
+        delete row.google_photos_id;
+        ({ data: photoRow, error: dbError } = await ctx.supabase
+          .from("photos").insert(row).select().single());
+        if (!dbError) {
+          return Response.json({ success: true, photo: photoRow, degraded: "no-dedupe-column" });
+        }
+      }
 
       if (dbError) {
         // 23505 = unique violation on google_photos_id: this exact media item is
