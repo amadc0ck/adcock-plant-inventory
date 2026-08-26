@@ -8,6 +8,10 @@ export default {
     const plantId = formData.get("plant_id") as string | null;
     const locationId = formData.get("location_id") as string | null;
     const notes = formData.get("notes") as string | null;
+    // Capture date read from the JPEG's EXIF by the browser before upload.
+    // This was being sent by the frontend and silently dropped here, so every
+    // photo fell back to its upload date — 556 of them, 0 with a real date.
+    const takenAt = formData.get("taken_at") as string | null;
 
     if (!file) {
       return Response.json({ error: "No photo provided" }, { status: 400 });
@@ -58,6 +62,7 @@ export default {
         location_id: locationId || null,
         drive_file_id: uploadResult.id,
         notes: notes || null,
+        taken_at: takenAt || null,
       })
       .select()
       .single();
