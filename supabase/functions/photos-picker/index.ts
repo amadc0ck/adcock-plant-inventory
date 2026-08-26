@@ -69,6 +69,9 @@ export default {
 
       // Selection is complete. Page through everything picked.
       const items: unknown[] = [];
+      // Anything not imported is counted and reported. Dropping items silently
+      // meant a selection of 2000 could import 1957 with no explanation.
+      const skipped = { videos: 0, unavailable: 0 };
       let pageToken: string | undefined;
       do {
         const q = new URLSearchParams({ sessionId, pageSize: "100" });
@@ -77,7 +80,11 @@ export default {
         const listData = await listRes.json();
         if (!listRes.ok) return Response.json({ error: listData.error?.message || "Could not list picked items" }, { status: listRes.status });
         for (const it of listData.mediaItems ?? []) {
-          if (it.type && it.type !== "PHOTO") continue; // videos are out of scope
+          // Videos are out of scope: the app stores and renders stills only.
+          if (it.type && it.type !== "PHOTO") { skipped.videos++; continue; }
+          // No baseUrl means there is nothing to download; importing it would
+          // fail one item at a time rather than being reported up front.
+          if (!it.mediaFile?.baseUrl) { skipped.unavailable++; continue; }
           items.push({
             id: it.id,
             createTime: it.createTime ?? null,
@@ -89,7 +96,7 @@ export default {
         pageToken = listData.nextPageToken;
       } while (pageToken);
 
-      return Response.json({ mediaItemsSet: true, items });
+      return Response.json({ mediaItemsSet: true, items, skipped, selected: items.length + skipped.videos + skipped.unavailable });
     }
 
     if (action === "import") {
