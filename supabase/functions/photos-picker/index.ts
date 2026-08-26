@@ -100,7 +100,7 @@ export default {
     }
 
     if (action === "import") {
-      const { baseUrl, filename, createTime, locationId, plantId } = await req.json();
+      const { baseUrl, filename, createTime, locationId, plantId, mediaItemId } = await req.json();
       if (!baseUrl) return Response.json({ error: "baseUrl required" }, { status: 400 });
 
       // baseUrls stay valid for 60 minutes; past that this 4xx's and the user
@@ -143,11 +143,20 @@ export default {
           taken_at: createTime || null,
           location_id: locationId || null,
           plant_id: plantId || null,
+          // Picker media item ids are stable across sessions, so recording one
+          // lets a later import skip anything already brought in. A partial
+          // unique index backstops it if two runs race.
+          google_photos_id: mediaItemId || null,
         })
         .select()
         .single();
 
-      if (dbError) return Response.json({ error: dbError.message }, { status: 500 });
+      if (dbError) {
+        // 23505 = unique violation on google_photos_id: this exact media item is
+        // already in the collection. Not a failure, just nothing to do.
+        if (dbError.code === "23505") return Response.json({ success: true, duplicate: true });
+        return Response.json({ error: dbError.message }, { status: 500 });
+      }
       return Response.json({ success: true, photo: photoRow });
     }
 
