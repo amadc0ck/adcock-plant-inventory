@@ -135,6 +135,16 @@ export async function callClaude(body: unknown) {
   return data;
 }
 
+// content[0] is NOT reliably the text block — a response can lead with a
+// thinking block, and `content[0].text` is then undefined, which turned every
+// call into "Could not parse Claude's response". Take every text block there
+// is and join them.
+export function textFromResponse(data: unknown): string {
+  const blocks = (data as { content?: { type?: string; text?: string }[] })?.content || [];
+  return blocks.filter((b) => b && b.type === "text" && typeof b.text === "string")
+    .map((b) => b.text).join("\n").trim();
+}
+
 // Claude is asked for bare JSON, but a stray fence or preamble should not lose
 // the whole call.
 export function parseJson(text: string): Record<string, unknown> {
@@ -144,7 +154,17 @@ export function parseJson(text: string): Record<string, unknown> {
   } catch {
     const start = cleaned.indexOf("{");
     const end = cleaned.lastIndexOf("}");
-    if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1));
-    throw new Error("Could not parse Claude's response");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(cleaned.slice(start, end + 1));
+      } catch { /* fall through to the reported error */ }
+    }
+    // Carry what it actually said. "Could not parse" with nothing attached is
+    // the least useful error in the app, and it cost two rounds to diagnose.
+    throw new Error(
+      cleaned
+        ? `Could not parse Claude's response: ${cleaned.slice(0, 300)}`
+        : "Claude returned no text content",
+    );
   }
 }

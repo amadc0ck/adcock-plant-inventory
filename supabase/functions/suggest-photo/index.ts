@@ -1,6 +1,6 @@
 import { withSupabase } from "npm:@supabase/server@^1";
 import { getValidGoogleAccessToken, getSupabaseAdmin } from "../_shared/google-auth.ts";
-import { buildContext, arrayBufferToBase64, callClaude, parseJson } from "../_shared/abg-context.ts";
+import { buildContext, arrayBufferToBase64, callClaude, parseJson, textFromResponse } from "../_shared/abg-context.ts";
 
 // AI-1. Replaces identify-plant-claude's "what species is this?" with "which of
 // HER records does this belong to?" — a different question with a checkable
@@ -83,7 +83,7 @@ export default {
     try {
       claudeData = await callClaude({
         model: "claude-sonnet-5",
-        max_tokens: 600,
+        max_tokens: 1400,
         system: [{ type: "text", text: catalogue, cache_control: { type: "ephemeral" } }],
         messages: [{
           role: "user",
@@ -93,7 +93,7 @@ export default {
           ],
         }],
       });
-      parsed = parseJson((claudeData as any).content?.[0]?.text || "");
+      parsed = parseJson(textFromResponse(claudeData));
     } catch (err) {
       return Response.json({ error: String((err as Error).message || err) }, { status: 502 });
     }

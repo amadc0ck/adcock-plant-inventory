@@ -1,5 +1,5 @@
 import { withSupabase } from "npm:@supabase/server@^1";
-import { callClaude, parseJson } from "../_shared/abg-context.ts";
+import { callClaude, parseJson, textFromResponse } from "../_shared/abg-context.ts";
 
 // AI-2. No image: every field here follows from the NAME, not the photograph.
 // Sending a picture to answer "what zone is Aeonium arboreum hardy to" would
@@ -62,10 +62,10 @@ export default {
     try {
       const data = await callClaude({
         model: "claude-sonnet-5",
-        max_tokens: 900,
+        max_tokens: 1700,
         messages: [{ role: "user", content: prompt }],
       });
-      parsed = parseJson((data as any).content?.[0]?.text || "");
+      parsed = parseJson(textFromResponse(data));
     } catch (err) {
       return Response.json({ error: String((err as Error).message || err) }, { status: 502 });
     }
