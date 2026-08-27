@@ -13,7 +13,7 @@ type Db = ReturnType<typeof createClient>;
 export interface AbgContext {
   taxa: { id: string; name: string; common: string | null }[];
   specimens: { id: string; acc: string; taxon: string; location: string | null }[];
-  locations: { id: string; path: string; holds_plants: boolean; archive: boolean }[];
+  locations: { id: string; path: string; holds_plants: boolean; archive: boolean; period: string | null }[];
   corrections: string[];
 }
 
@@ -41,7 +41,7 @@ export async function buildContext(db: Db): Promise<AbgContext> {
   const [taxaRes, plantsRes, locsRes] = await Promise.all([
     db.from("taxa").select("id,botanical_name,common_name,genus,species_epithet,cultivar,is_hybrid,working_label"),
     db.from("plants").select("id,accession_number,taxa_id,location_id,status"),
-    db.from("locations").select("id,name,parent_location_id,type,holds_plants,gallery_row,archived"),
+    db.from("locations").select("id,name,parent_location_id,type,holds_plants,gallery_row,archived,active_from,active_to,locality"),
   ]);
 
   // Past decisions, fed back as examples. Kept out of the Promise.all and
@@ -96,12 +96,21 @@ export async function buildContext(db: Db): Promise<AbgContext> {
       })),
     locations: locRows
       .filter((l) => !l.archived)
-      .map((l) => ({
-        id: l.id as string,
-        path: pathOf(l.id as string),
-        holds_plants: holdsPlants(l),
-        archive: l.gallery_row === "archives",
-      })),
+      .map((l) => {
+        // When the collection lived somewhere is the single best clue for a
+        // photo with a capture date. A 2019 shot cannot be in a bucket built
+        // in 2026, and it very probably IS the place she lived in 2019.
+        const from = l.active_from ? String(l.active_from).slice(0, 4) : "";
+        const to = l.active_to ? String(l.active_to).slice(0, 4) : "";
+        const span = from && to ? (from === to ? from : `${from}-${to}`) : (from ? `${from}-present` : to);
+        return {
+          id: l.id as string,
+          path: pathOf(l.id as string),
+          holds_plants: holdsPlants(l),
+          archive: l.gallery_row === "archives",
+          period: [span, l.locality].filter(Boolean).join(", ") || null,
+        };
+      }),
     corrections,
   };
 }

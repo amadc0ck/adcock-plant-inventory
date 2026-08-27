@@ -8,7 +8,13 @@ import { buildContext, arrayBufferToBase64, callClaude, parseJson, textFromRespo
 // built for it.
 export default {
   fetch: withSupabase({ auth: "user" }, async (req, ctx) => {
-    const { photo_id } = await req.json();
+    // focus lets her ask ONE question instead of all of them. "Where was this
+    // taken?" is a different job from "what plant is this?", it is the one she
+    // has 932 photos of, and a narrower prompt is both cheaper and better —
+    // the model is not splitting attention across five answers.
+    const { photo_id, focus } = await req.json();
+    const locationOnly = focus === "location";
+    const plantOnly = focus === "plant";
     if (!photo_id) return Response.json({ error: "Missing photo_id" }, { status: 400 });
 
     const { data: photo, error: photoErr } = await ctx.supabase
@@ -51,11 +57,32 @@ export default {
       "",
       "## Locations",
       ...cx.locations.map((l) =>
-        `${l.id} | ${l.path}${l.holds_plants ? " | holds plants" : " | area, holds no plants directly"}${l.archive ? " | ARCHIVE, a former home" : ""}`),
+        `${l.id} | ${l.path}${l.holds_plants ? " | holds plants" : " | area, holds no plants directly"}${l.archive ? " | ARCHIVE, a former home" : ""}${l.period ? ` | ${l.period}` : ""}`),
       cx.corrections.length ? "\n## Recent decisions by the collection owner — learn from these\n" + cx.corrections.join("\n") : "",
     ].join("\n");
 
-    const task = [
+    const dated = photo.taken_at ? String(photo.taken_at).slice(0, 10) : null;
+
+    const locationTask = [
+      "Where was this photograph taken? Match it to one location from the list above.",
+      dated ? `It was taken on ${dated}. Several locations carry the years the collection lived there — use that first, it is the strongest evidence you have.` : "It has no capture date.",
+      filedAt ? `It is currently filed under: ${filedAt}.` : "It is not filed anywhere yet.",
+      "",
+      "What to look at, in order:",
+      "1. The date against each location's period. A photo from a year the collection lived somewhere else is almost certainly from that place.",
+      "2. The setting — flooring, walls, fencing, light, the pots and staging visible around the plant.",
+      "3. Whether it is a close-up of one plant (suggest the container it sits in) or a wide view (suggest the area).",
+      "",
+      "Rules:",
+      "- Return an id copied exactly from the list. Never invent one.",
+      "- Return null if you genuinely cannot tell. Null is far more useful than a guess: she has 932 of these and undoing a wrong one costs more than filing it by hand.",
+      "- A close-up with no surroundings visible is usually a null. Say so in the rationale.",
+      "",
+      "Respond with ONLY this JSON, no prose and no markdown:",
+      `{"location_id": "uuid or null", "confidence": "high|medium|low", "rationale": "one sentence naming what in the image or the date led you here"}`,
+    ].filter(Boolean).join("\n");
+
+    const fullTask = [
       "Look at the photograph and suggest how it should be filed.",
       photo.taken_at ? `The photo was taken on ${String(photo.taken_at).slice(0, 10)}.` : "",
       filedAt ? `It is currently filed under: ${filedAt}.` : "It is not filed to any location yet.",
@@ -78,12 +105,14 @@ export default {
       ` "rationale": "one sentence on what in the image led you here"}`,
     ].filter(Boolean).join("\n");
 
+    const task = locationOnly ? locationTask : fullTask;
+
     let parsed: Record<string, unknown>;
     let claudeData: Record<string, unknown>;
     try {
       claudeData = await callClaude({
         model: "claude-sonnet-5",
-        max_tokens: 1400,
+        max_tokens: locationOnly ? 400 : 1400,
         system: [{ type: "text", text: catalogue, cache_control: { type: "ephemeral" } }],
         messages: [{
           role: "user",
@@ -106,26 +135,45 @@ export default {
     const conf = ({ high: 0.85, medium: 0.55, low: 0.25 } as Record<string, number>)[String(parsed.confidence)] ?? null;
     const rationale = typeof parsed.rationale === "string" ? parsed.rationale.slice(0, 400) : null;
 
+    // The rationale explains the IDENTIFICATION — why this photo is that plant.
+    // Repeating it under the photo type, the bloom flag and the health note
+    // made every card say the same paragraph three times, and put the plant's
+    // reasoning under a health note it did not describe.
     const rows: Record<string, unknown>[] = [];
-    const add = (kind: string, extra: Record<string, unknown>) =>
-      rows.push({ photo_id, kind, confidence: conf, rationale, status: "pending", raw_response: parsed, ...extra });
+    let rationaleUsed = false;
+    const add = (kind: string, extra: Record<string, unknown>, explain?: boolean) => {
+      const withWhy = explain && !rationaleUsed;
+      if (withWhy) rationaleUsed = true;
+      rows.push({
+        photo_id, kind, confidence: conf,
+        rationale: withWhy ? rationale : null,
+        status: "pending", raw_response: parsed, ...extra,
+      });
+    };
 
-    if (validPlant) add("plant_tag", { value_id: validPlant });
-    else if (validTaxon) add("new_specimen", { value_id: validTaxon });
-    if (validLoc && validLoc !== photo.location_id) add("location_tag", { value_id: validLoc });
-    if (typeof parsed.photo_type === "string" &&
+    if (!locationOnly) {
+      if (validPlant) add("plant_tag", { value_id: validPlant }, true);
+      else if (validTaxon) add("new_specimen", { value_id: validTaxon }, true);
+    }
+    if (!plantOnly && validLoc && validLoc !== photo.location_id) add("location_tag", { value_id: validLoc }, true);
+    if (!locationOnly && typeof parsed.photo_type === "string" &&
         ["general", "bloom", "detail", "condition"].includes(parsed.photo_type) &&
         parsed.photo_type !== (photo.photo_type || "general")) {
       add("photo_type", { value_text: parsed.photo_type });
     }
-    if (parsed.in_bloom === true) add("bloom", { value_text: "in_bloom" });
-    if (typeof parsed.health_note === "string" && parsed.health_note.trim()) {
+    if (!locationOnly && parsed.in_bloom === true) add("bloom", { value_text: "in_bloom" });
+    if (!locationOnly && typeof parsed.health_note === "string" && parsed.health_note.trim()) {
       add("health_note", { value_text: parsed.health_note.trim().slice(0, 400) });
     }
 
     // Re-asking replaces the previous pending answer rather than stacking a
     // second opinion nobody asked for.
-    await ctx.supabase.from("suggestions").delete().eq("photo_id", photo_id).eq("status", "pending");
+    // A focused ask replaces only what it can answer. Asking "where?" must not
+    // discard a plant suggestion from an earlier full pass.
+    let clear = ctx.supabase.from("suggestions").delete().eq("photo_id", photo_id).eq("status", "pending");
+    if (locationOnly) clear = clear.eq("kind", "location_tag");
+    if (plantOnly) clear = clear.in("kind", ["plant_tag", "new_specimen"]);
+    await clear;
 
     if (!rows.length) {
       return Response.json({ success: true, suggestions: [], note: "Claude found nothing it could match with confidence." });
