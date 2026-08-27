@@ -38,17 +38,30 @@ function holdsPlants(l: Record<string, unknown>): boolean {
 }
 
 export async function buildContext(db: Db): Promise<AbgContext> {
-  const [taxaRes, plantsRes, locsRes, corrRes] = await Promise.all([
+  const [taxaRes, plantsRes, locsRes] = await Promise.all([
     db.from("taxa").select("id,botanical_name,common_name,genus,species_epithet,cultivar,is_hybrid,working_label"),
     db.from("plants").select("id,accession_number,taxa_id,location_id,status"),
     db.from("locations").select("id,name,parent_location_id,type,holds_plants,gallery_row,archived"),
-    // Wrapped: before the suggestions migration runs this table does not
-    // exist, and letting that failure propagate would break the whole call for
-    // a nice-to-have. The examples are an improvement, not a prerequisite.
-    db.from("suggestions").select("kind,status,rationale,value_text")
-      .in("status", ["accepted", "dismissed"]).order("created_at", { ascending: false }).limit(20)
-      .then((r: { data: unknown }) => r, () => ({ data: [] })),
   ]);
+
+  // Past decisions, fed back as examples. Kept out of the Promise.all and
+  // wrapped in its own try: before the suggestions migration runs this table
+  // does not exist, and an improvement must never take down the call it is
+  // improving.
+  let corrections: string[] = [];
+  try {
+    const corrRes = await db.from("suggestions")
+      .select("kind,status,rationale")
+      .in("status", ["accepted", "dismissed"])
+      .order("created_at", { ascending: false })
+      .limit(20);
+    corrections = (corrRes.data || [])
+      .filter((r: Record<string, unknown>) => r.rationale)
+      .map((r: Record<string, unknown>) =>
+        `${r.status === "accepted" ? "ACCEPTED" : "REJECTED"} (${r.kind}): ${r.rationale}`);
+  } catch {
+    corrections = [];
+  }
 
   const taxaRows = taxaRes.data || [];
   const locRows = locsRes.data || [];
@@ -89,12 +102,7 @@ export async function buildContext(db: Db): Promise<AbgContext> {
         holds_plants: holdsPlants(l),
         archive: l.gallery_row === "archives",
       })),
-    // Her accepted and dismissed decisions, fed back as examples. This is the
-    // only thing here that actually accumulates: the model is never trained,
-    // but it can be shown what she has already corrected.
-    corrections: (corrRes.data || [])
-      .filter((r) => r.rationale)
-      .map((r) => `${r.status === "accepted" ? "ACCEPTED" : "REJECTED"} (${r.kind}): ${r.rationale}`),
+    corrections,
   };
 }
 
