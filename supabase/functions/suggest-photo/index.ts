@@ -15,6 +15,10 @@ export default {
     const { photo_id, focus } = await req.json();
     const locationOnly = focus === "location";
     const plantOnly = focus === "plant";
+    // "How is this plant doing?" is a third question, and unlike the other two
+    // it is only answerable once the photo is already filed: the diagnosis is
+    // worth little without knowing which specimen it is and where it lives.
+    const healthOnly = focus === "health";
     if (!photo_id) return Response.json({ error: "Missing photo_id" }, { status: 400 });
 
     const { data: photo, error: photoErr } = await ctx.supabase
@@ -105,14 +109,43 @@ export default {
       ` "rationale": "one sentence on what in the image led you here"}`,
     ].filter(Boolean).join("\n");
 
-    const task = locationOnly ? locationTask : fullTask;
+    // The specimen and its species, so the read is against what this plant is
+    // supposed to look like rather than against cacti in general.
+    const subject = photo.plant_id ? cx.specimens.find((sp) => sp.id === photo.plant_id) : null;
+
+    const healthTask = [
+      "Assess the health of the plant in this photograph. Do not identify it and do not file it — both are already settled.",
+      subject ? `This is ${subject.acc}, ${subject.taxon}${subject.location ? `, growing at ${subject.location}` : ""}.` : "",
+      dated ? `The photo was taken on ${dated}.` : "",
+      "",
+      "Judge it against what this species should look like when healthy. Several succulents look alarming when they are entirely fine:",
+      "- Lower leaves drying and shrivelling is normal growth, not decline.",
+      "- Some species are summer-dormant and look half dead in July. That is correct behaviour, not a problem.",
+      "- Red, purple or bronze colouring is often sun stress, which is usually cosmetic and sometimes desirable.",
+      "",
+      "Say plainly when something is genuinely wrong: rot at the base or centre, pests, etiolation, sunburn scarring, desiccation, or a plant outgrowing its container.",
+      "",
+      "Rules:",
+      "- A photograph shows one moment from one angle. Where you cannot tell, say so rather than guessing — this drives what she does to a living plant.",
+      "- Rot at the centre or the base is the one thing worth being forward about, because it spreads and it is often fatal.",
+      "- suggested_health must be one of: healthy, watch, urgent, recovery, unknown. Use urgent only for something needing attention within days.",
+      "",
+      "Respond with ONLY this JSON, no prose and no markdown:",
+      `{"assessment": "two or three sentences on what you can actually see",`,
+      ` "issues": ["short phrase per problem, empty array if none"],`,
+      ` "recommendation": "one sentence on what to do, or null if nothing is needed",`,
+      ` "suggested_health": "healthy|watch|urgent|recovery|unknown",`,
+      ` "confidence": "high|medium|low"}`,
+    ].filter(Boolean).join("\n");
+
+    const task = locationOnly ? locationTask : healthOnly ? healthTask : fullTask;
 
     let parsed: Record<string, unknown>;
     let claudeData: Record<string, unknown>;
     try {
       claudeData = await callClaude({
         model: "claude-sonnet-5",
-        max_tokens: locationOnly ? 400 : 1400,
+        max_tokens: locationOnly ? 400 : healthOnly ? 700 : 1400,
         system: [{ type: "text", text: catalogue, cache_control: { type: "ephemeral" } }],
         messages: [{
           role: "user",
@@ -151,18 +184,41 @@ export default {
       });
     };
 
-    if (!locationOnly) {
+    if (healthOnly) {
+      const assessment = typeof parsed.assessment === "string" ? parsed.assessment.trim() : "";
+      const issues = Array.isArray(parsed.issues) ? parsed.issues.filter((x) => typeof x === "string" && x.trim()) : [];
+      const rec = typeof parsed.recommendation === "string" ? parsed.recommendation.trim() : "";
+      const note = [assessment, issues.length ? `Issues: ${issues.join("; ")}.` : "", rec ? `Suggested: ${rec}` : ""]
+        .filter(Boolean).join(" ");
+      if (note) {
+        rows.push({
+          photo_id, kind: "health_note", confidence: conf, rationale: null,
+          status: "pending", raw_response: parsed, value_text: note.slice(0, 900),
+        });
+      }
+      // A proposed tier is a separate, separately-acceptable suggestion: she may
+      // want the note on the record without changing the plant's status.
+      const sh = String(parsed.suggested_health || "");
+      if (["healthy", "watch", "urgent", "recovery", "unknown"].includes(sh) && photo.plant_id) {
+        rows.push({
+          photo_id, kind: "health_status", confidence: conf, rationale: null,
+          status: "pending", raw_response: parsed, value_text: sh,
+        });
+      }
+    }
+
+    if (!locationOnly && !healthOnly) {
       if (validPlant) add("plant_tag", { value_id: validPlant }, true);
       else if (validTaxon) add("new_specimen", { value_id: validTaxon }, true);
     }
-    if (!plantOnly && validLoc && validLoc !== photo.location_id) add("location_tag", { value_id: validLoc }, true);
-    if (!locationOnly && typeof parsed.photo_type === "string" &&
+    if (!plantOnly && !healthOnly && validLoc && validLoc !== photo.location_id) add("location_tag", { value_id: validLoc }, true);
+    if (!locationOnly && !healthOnly && typeof parsed.photo_type === "string" &&
         ["general", "bloom", "detail", "condition"].includes(parsed.photo_type) &&
         parsed.photo_type !== (photo.photo_type || "general")) {
       add("photo_type", { value_text: parsed.photo_type });
     }
-    if (!locationOnly && parsed.in_bloom === true) add("bloom", { value_text: "in_bloom" });
-    if (!locationOnly && typeof parsed.health_note === "string" && parsed.health_note.trim()) {
+    if (!locationOnly && !healthOnly && parsed.in_bloom === true) add("bloom", { value_text: "in_bloom" });
+    if (!locationOnly && !healthOnly && typeof parsed.health_note === "string" && parsed.health_note.trim()) {
       add("health_note", { value_text: parsed.health_note.trim().slice(0, 400) });
     }
 
@@ -173,6 +229,7 @@ export default {
     let clear = ctx.supabase.from("suggestions").delete().eq("photo_id", photo_id).eq("status", "pending");
     if (locationOnly) clear = clear.eq("kind", "location_tag");
     if (plantOnly) clear = clear.in("kind", ["plant_tag", "new_specimen"]);
+    if (healthOnly) clear = clear.in("kind", ["health_note", "health_status"]);
     await clear;
 
     if (!rows.length) {
