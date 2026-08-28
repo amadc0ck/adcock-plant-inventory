@@ -22,7 +22,14 @@ const FIELDS: Record<string, string> = {
 
 export default {
   fetch: withSupabase({ auth: "user" }, async (req, ctx) => {
-    const { taxa_id } = await req.json();
+    // NAME-2. `focus: "name"` checks the NAME itself rather than filling blanks.
+    // The default mode deliberately never touches a field she has filled in —
+    // "anything she has filled in is hers" — which is exactly why a misspelled
+    // name could never be corrected. This mode inverts that for the name parts
+    // only, and every result still arrives as a suggestion she accepts or
+    // dismisses; nothing is written behind her.
+    const { taxa_id, focus } = await req.json();
+    const nameOnly = focus === "name";
     if (!taxa_id) return Response.json({ error: "Missing taxa_id" }, { status: 400 });
 
     const { data: t, error } = await ctx.supabase.from("taxa").select("*").eq("id", taxa_id).single();
@@ -35,7 +42,7 @@ export default {
       if (f === "frost_tender") return v === null || v === undefined;
       return v === null || v === undefined || String(v).trim() === "";
     });
-    if (!blank.length) {
+    if (!nameOnly && !blank.length) {
       return Response.json({ success: true, suggestions: [], note: "This species record is already complete." });
     }
 
@@ -61,6 +68,94 @@ export default {
 
     const name = composed || t.botanical_name || t.working_label || t.common_name;
     if (!name) return Response.json({ error: "This species has no name to look it up by" }, { status: 400 });
+
+    // ---------- NAME-2: check and parse the name ----------
+    if (nameOnly) {
+      const raw = t.botanical_name || composed || t.working_label || "";
+      const namePrompt = [
+        "You are checking one entry in a private succulent and cactus collection for correct botanical naming.",
+        "",
+        `The record currently reads: ${raw}`,
+        t.common_name ? `Common name on the record: ${t.common_name}` : "",
+        `Structured parts currently stored — genus: ${t.genus || "(empty)"}, species_epithet: ${t.species_epithet || "(empty)"}, infraspecific: ${t.infraspecific || "(empty)"}, cultivar: ${t.cultivar || "(empty)"}, is_hybrid: ${t.is_hybrid ? "true" : "false"}`,
+        "",
+        "Do two things:",
+        "1. Correct the name if it is misspelled, miscapitalised, or uses an outdated synonym. Species epithets are ALWAYS lowercase. Genus is always capitalised.",
+        "2. Split it into its parts.",
+        "",
+        "Rules:",
+        "- Only correct a spelling when you are confident of the intended taxon. A plausible-looking name you do not recognise should be returned unchanged with confidence low, NOT invented into something else.",
+        "- cultivar: the epithet only, no quotes. 'Zwartkop', not \"'Zwartkop'\".",
+        "- species_epithet: lowercase, no genus. Null for a cultivar of hybrid origin with no species.",
+        "- infraspecific: the rank and epithet together, e.g. \"var. erinacea\", \"f. palmeri\". Rank epithets are lowercase. Null if there is none.",
+        "- is_hybrid: true only for an interspecific hybrid written with a multiplication sign, e.g. Sedum × rubrotinctum.",
+        "- botanical_name: the full corrected name as it should read, cultivar in single quotes.",
+        "- family: the botanical family, if you are confident.",
+        "- A working label that is not a botanical name at all (\"unidentified cactus\") is not an error. Return it unchanged with confidence low.",
+        "",
+        "Respond with ONLY this JSON, no prose and no markdown:",
+        `{"genus": "string or null",`,
+        ` "species_epithet": "string or null",`,
+        ` "infraspecific": "string or null",`,
+        ` "cultivar": "string or null",`,
+        ` "is_hybrid": true or false,`,
+        ` "botanical_name": "string or null",`,
+        ` "family": "string or null",`,
+        ` "correction": "one sentence on what was wrong, or null if the name was already correct",`,
+        ` "confidence": "high|medium|low"}`,
+      ].filter(Boolean).join("\n");
+
+      let np: Record<string, unknown>;
+      try {
+        const data = await callClaude({
+          model: "claude-sonnet-5",
+          max_tokens: 700,
+          messages: [{ role: "user", content: namePrompt }],
+        });
+        np = parseJson(textFromResponse(data));
+      } catch (err) {
+        return Response.json({ error: String((err as Error).message || err) }, { status: 502 });
+      }
+
+      const nconf = ({ high: 0.85, medium: 0.55, low: 0.25 } as Record<string, number>)[String(np.confidence)] ?? null;
+      const correction = typeof np.correction === "string" && np.correction.trim() ? np.correction.trim() : null;
+
+      // Only propose a field that actually DIFFERS from what is stored — a
+      // suggestion confirming the status quo is noise she has to dismiss.
+      const NAME_FIELDS = ["genus", "species_epithet", "infraspecific", "cultivar", "botanical_name", "family", "is_hybrid"];
+      const current = (f: string) => {
+        const v = (t as Record<string, unknown>)[f];
+        return v === null || v === undefined ? "" : String(v).trim();
+      };
+      let usedRationale = false;
+      const nameRows = NAME_FIELDS
+        .map((f) => {
+          let v = np[f];
+          if (f === "is_hybrid") v = v === true;
+          if (v === null || v === undefined) return null;
+          const text = f === "is_hybrid" ? String(v) : String(v).trim();
+          if (!text) return null;
+          // Case matters here — "Agavoides" -> "agavoides" IS the correction.
+          if (text === current(f)) return null;
+          const row = {
+            taxa_id, kind: "species_field", field: f, value_text: text.slice(0, 2000),
+            confidence: nconf,
+            rationale: usedRationale ? null : correction,
+            status: "pending", raw_response: np,
+          };
+          usedRationale = true;
+          return row;
+        })
+        .filter(Boolean);
+
+      await ctx.supabase.from("suggestions").delete().eq("taxa_id", taxa_id).eq("status", "pending");
+      if (!nameRows.length) {
+        return Response.json({ success: true, suggestions: [], note: "The name looks right as it is." });
+      }
+      const { data: nameData, error: nameErr } = await ctx.supabase.from("suggestions").insert(nameRows).select();
+      if (nameErr) return Response.json({ error: nameErr.message }, { status: 500 });
+      return Response.json({ success: true, suggestions: nameData });
+    }
 
     const known = Object.keys(FIELDS)
       .filter((f) => !blank.includes(f) && (t as Record<string, unknown>)[f])
