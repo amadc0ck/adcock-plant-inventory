@@ -39,8 +39,27 @@ export default {
       return Response.json({ success: true, suggestions: [], note: "This species record is already complete." });
     }
 
-    const name = [t.botanical_name, t.common_name].filter(Boolean).join(" / ") ||
-      [t.genus, t.species_epithet].filter(Boolean).join(" ") || t.working_label;
+    // Compose the name the way the app does, cultivar INCLUDED.
+    //
+    // This read `botanical_name` first and fell back to genus + epithet, never
+    // touching `cultivar`. Since v1.65.0 a taxon built from parts often has no
+    // `botanical_name` at all, and a cultivar of hybrid origin has no epithet
+    // either — so Echeveria 'Tippy', 'Flamingo', 'Purple Perle' and the rest all
+    // reduced to the bare word "Echeveria". Claude was being asked for the
+    // mature size and hardiness of an entire genus of hundreds of species, and
+    // correctly returned nulls for everything. It read as "Claude has no
+    // suggestions"; it was really "the question was unanswerable".
+    //
+    // Same failure as ensureTaxonForName() before v1.83.0: reading a column
+    // instead of the composed name.
+    const composed = [
+      t.genus,
+      t.is_hybrid && t.species_epithet ? `\u00D7 ${t.species_epithet}` : t.species_epithet,
+      t.infraspecific,
+      t.cultivar ? `'${String(t.cultivar).replace(/^['\u2018\u2019"]+|['\u2018\u2019"]+$/g, "")}'` : null,
+    ].filter(Boolean).join(" ").trim();
+
+    const name = composed || t.botanical_name || t.working_label || t.common_name;
     if (!name) return Response.json({ error: "This species has no name to look it up by" }, { status: 400 });
 
     const known = Object.keys(FIELDS)
@@ -49,6 +68,10 @@ export default {
 
     const prompt = [
       `Species: ${name}`,
+      t.common_name ? `Also known as: ${t.common_name}` : "",
+      t.cultivar
+        ? `This is a named CULTIVAR. Answer for the cultivar where it differs from the species, and fall back to the species where the cultivar is not separately documented. Do not answer for the genus as a whole.`
+        : "",
       known.length ? `Already recorded (do not contradict these):\n${known.join("\n")}` : "",
       "",
       "Fill in ONLY these missing fields for a private succulent collection in the San Francisco Bay Area:",
