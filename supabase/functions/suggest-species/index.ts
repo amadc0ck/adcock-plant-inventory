@@ -9,7 +9,10 @@ const FIELDS: Record<string, string> = {
   genus: "Genus only, e.g. Aeonium",
   species_epithet: "Species epithet only, lowercase, e.g. arboreum. Null for a cultivar of hybrid origin.",
   description: "Two sentences on what this kind of plant LOOKS like. Appearance only — no care advice.",
-  plant_type: "Exactly one of: cactus, aeonium, agave, aloe, cotyledon, crassula, echeveria, euphorbia, haworthia, kalanchoe, portulacaria, sedum, sempervivum, senecio",
+  // Must stay in step with PLANT_TYPE_LABELS in index.html — the app's dropdown
+  // and this prompt are two copies of one vocabulary. curio, dracaena, hoya,
+  // haworthiopsis and lithops added v2.8.0.
+  plant_type: "Exactly one of: cactus, aeonium, agave, aloe, cotyledon, crassula, curio, dracaena, echeveria, euphorbia, haworthia, haworthiopsis, hoya, kalanchoe, lithops, portulacaria, sedum, sempervivum, senecio",
   growth_habit: "Exactly one of: columnar, globular, rosette, clumping, caudiciform, trailing, mounding, upright, climbing, groundcover, solitary",
   mature_size: "Height and spread in feet or inches, e.g. \"3-4 ft tall x 2 ft wide\"",
   bloom_season: "Exactly one of: spring, early_summer, summer, late_summer, fall, winter, intermittent, monocarpic, not_observed",
@@ -18,6 +21,45 @@ const FIELDS: Record<string, string> = {
   hardy_to: "Lowest USDA zone or temperature it survives, e.g. \"Zone 9\" or \"25F\"",
   water_needs: "Exactly one of: low, moderate, high",
   frost_tender: "true if a light frost will damage or kill it, false if it tolerates freezing",
+  // v2.8.0. `light_conditions` is a text[] in the database. Claude answers with
+  // a semicolon-separated string and the app splits it back into an array on
+  // accept — suggestions.value_text is text, so there is nowhere to put a real
+  // array in between.
+  light_conditions: "Light this plant wants. One or more of: direct, indirect, partial, full, shade, morning, afternoon, all_day. Separate several with a semicolon, e.g. \"direct; morning\".",
+  // Hybrid-only, gated below — see HYBRID_ONLY.
+  parentage: "The two parent taxa of this hybrid or cultivar, e.g. \"Echeveria gibbiflora \u00D7 Echeveria elegans\". Null unless you actually know the recorded cross.",
+  is_hybrid: "true if this is a hybrid, false otherwise",
+};
+
+/* v2.8.0. Measured against Amanda's collection: 132 of 133 taxa had no
+   parentage, and for most that is CORRECT — Mammillaria elongata is a straight
+   species and has no cross to record. Asking anyway would have produced a
+   hundred "unknown" suggestions to dismiss.
+
+   So these two are only asked when the record looks like a hybrid: a named
+   cultivar, an is_hybrid flag already set, or a nothogeneric name. Her
+   Graptoveria, Graptosedum, Pachyveria and xPachyveria are all intergeneric
+   crosses and are exactly the rows where parentage is worth having. */
+const HYBRID_ONLY = ["parentage", "is_hybrid"];
+const NOTHOGENERA = new Set([
+  "graptoveria", "graptosedum", "pachyveria", "sedeveria", "cremneria",
+  "mangave", "gasteraloe", "gastrolea", "alworthia",
+]);
+function looksHybrid(t: Record<string, unknown>): boolean {
+  const g = String(t.genus || "").trim();
+  if (t.is_hybrid === true) return true;
+  if (t.cultivar && String(t.cultivar).trim()) return true;
+  if (/^[x\u00D7]/i.test(g) && g.length > 1) return true;
+  return NOTHOGENERA.has(g.toLowerCase().replace(/^[x\u00D7]/i, ""));
+}
+
+/* A value that is present but says nothing. `origin` defaults to "unknown" on
+   every taxon, so the blank test below counted all 133 as answered and Claude
+   was never asked — which read as "Claude will not set origin". It was never
+   given the chance. Treated as blank; a suggestion is still hers to accept. */
+const SENTINELS: Record<string, string[]> = {
+  origin: ["unknown"],
+  bloom_season: ["not_observed"],
 };
 
 export default {
@@ -37,10 +79,14 @@ export default {
 
     // Only ever the blanks. Anything she has filled in is hers, and asking
     // about it would invite a suggestion to overwrite a fact she established.
+    const hybridish = looksHybrid(t as Record<string, unknown>);
     const blank = Object.keys(FIELDS).filter((f) => {
+      if (HYBRID_ONLY.includes(f) && !hybridish) return false;
       const v = (t as Record<string, unknown>)[f];
-      if (f === "frost_tender") return v === null || v === undefined;
-      return v === null || v === undefined || String(v).trim() === "";
+      if (f === "frost_tender" || f === "is_hybrid") return v === null || v === undefined;
+      if (Array.isArray(v)) return v.length === 0;
+      if (v === null || v === undefined || String(v).trim() === "") return true;
+      return (SENTINELS[f] || []).includes(String(v).trim().toLowerCase());
     });
     if (!nameOnly && !blank.length) {
       return Response.json({ success: true, suggestions: [], note: "This species record is already complete." });
@@ -189,8 +235,13 @@ export default {
     }
 
     const conf = ({ high: 0.85, medium: 0.55, low: 0.25 } as Record<string, number>)[String(parsed.confidence)] ?? null;
+    // "unknown" / "none" back from Claude is a non-answer. Writing it would
+    // replace a blank with a word that looks like a fact.
+    const NON_ANSWERS = new Set(["unknown", "none", "n/a", "na", "null", "not known", "unspecified"]);
     const rows = blank
       .filter((f) => parsed[f] !== null && parsed[f] !== undefined && String(parsed[f]).trim() !== "")
+      .filter((f) => !NON_ANSWERS.has(String(parsed[f]).trim().toLowerCase()))
+      .filter((f) => !(f === "is_hybrid" && parsed[f] !== true))
       .map((f) => ({
         taxa_id,
         kind: "species_field",
