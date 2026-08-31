@@ -31,6 +31,7 @@
  */
 
 import { createServer } from "node:http";
+import { createInterface } from "node:readline/promises";
 import { readFile, writeFile, appendFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -97,7 +98,54 @@ async function authorize(side) {
     ? "  (must be the Gmail account, using the OLD client id — that pair is the only\n   one Drive considers the creator of the existing files)\n"
     : "  (must be the Workspace account, using the NEW client id)\n");
 
-  const code = await new Promise((resolve, reject) => {
+  /* Two ways to receive the authorisation code. Manual is the DEFAULT because
+     it runs no server at all: the browser lands on a dead localhost URL, shows
+     "can't connect", and the code sits in the address bar for you to paste.
+
+     Localhost is still the right redirect target even though nothing listens.
+     It is the ONLY choice where the code never leaves this machine — the
+     browser cannot connect, so nothing is transmitted anywhere. Pointing the
+     redirect at a real website instead would deposit a live authorisation code
+     in that server's access logs.
+
+     --serve opts back into the 10-second loopback listener, which just saves
+     the copy/paste. */
+  const code = process.argv.includes("--serve")
+    ? await codeFromListener()
+    : await codeFromPaste();
+
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: REDIRECT, grant_type: "authorization_code" }),
+  });
+  const t = await res.json();
+  if (!t.refresh_token) die(`No refresh_token returned: ${JSON.stringify(t)}`);
+  await saveToken(side, { ...t, obtained_at: Date.now() });
+  console.log(`✓ ${side} account authorised.`);
+}
+
+// Nothing listens. The browser fails to connect, which is the point — the code
+// stays in the address bar and never crosses the network.
+async function codeFromPaste() {
+  console.log("Your browser will land on a page that will NOT load — \"can't connect\"\n" +
+              "or similar. That is expected. Copy the WHOLE address from the address\n" +
+              "bar and paste it below; it contains the code.\n");
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  const raw = (await rl.question("Paste the full localhost URL (or just the code): ")).trim();
+  rl.close();
+  if (!raw) die("Nothing pasted.");
+  let code = raw;
+  if (raw.includes("code=")) {
+    try { code = new URL(raw).searchParams.get("code") || ""; }
+    catch { code = (raw.match(/[?&]code=([^&\s]+)/) || [])[1] || ""; }
+    code = decodeURIComponent(code || "");
+  }
+  if (!code) die("Could not find a code in that. Look for `code=` in the URL.");
+  return code;
+}
+
+async function codeFromListener() {
+  return await new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
       const u = new URL(req.url, `http://localhost:${LOOPBACK_PORT}`);
       if (u.pathname !== "/callback") { res.writeHead(404).end(); return; }
@@ -111,15 +159,6 @@ async function authorize(side) {
     server.listen(LOOPBACK_PORT);
     setTimeout(() => { server.close(); reject(new Error("timed out after 5 minutes")); }, 300000);
   });
-
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: REDIRECT, grant_type: "authorization_code" }),
-  });
-  const t = await res.json();
-  if (!t.refresh_token) die(`No refresh_token returned: ${JSON.stringify(t)}`);
-  await saveToken(side, { ...t, obtained_at: Date.now() });
-  console.log(`✓ ${side} account authorised.`);
 }
 
 /* Access tokens last an hour; 2,600 files will outlive one. */

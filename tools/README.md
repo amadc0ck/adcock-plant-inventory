@@ -28,6 +28,17 @@ Do not reorder these. Steps 1–3 change nothing that the live app depends on.
    Also add `http://localhost:8910/callback` to **both** the old and the new
    client, so this script can authorise. Remove it afterwards.
 
+   **Nothing listens on that port.** By default the script prints the consent
+   URL, the browser lands on a page that fails to load, and you paste the
+   address bar back in — the code is in the query string. The URI still has to
+   be registered because Google validates it before redirecting, but no server
+   runs. `--serve` opts into a 10-second loopback listener that skips the paste.
+
+   Localhost is the right target precisely *because* nothing is there: the
+   browser cannot connect, so the authorisation code never crosses the network.
+   Redirecting to a real website instead would leave a live code in that
+   server's access logs.
+
 2. **Put the credentials in a file, not the environment.**
    ```
    cp tools/env.template tools/.migration/env
