@@ -356,14 +356,14 @@ async function sql() {
   const m = await readMap();
   if (!m.size) die("Nothing in the map yet — run 'copy' first.");
   const rows = [...m.values()];
-  const chunks = [];
-  for (let i = 0; i < rows.length; i += 500) chunks.push(rows.slice(i, i + 500));
-  const body = chunks.map((c, n) => `-- chunk ${n + 1} of ${chunks.length} (${c.length} photos)
-update photos p set drive_file_id = m.new_id
-from (values
-${c.map((r) => `  ('${r.old_id}','${r.new_id}')`).join(",\n")}
-) as m(old_id, new_id)
-where p.drive_file_id = m.old_id;`).join("\n\n");
+
+  /* One temp table rather than six separate VALUES joins. It makes the
+     verification honest: after the update we can count how many photos landed
+     on a new id AND how many are somehow still on an old one, by joining
+     against the same pairs the update used. An earlier version checked a single
+     id against an expected total of 2,732, which would have read as a failure.
+     ON COMMIT DROP means the transaction cleans up after itself. */
+  const values = rows.map((r) => `  ('${r.old_id}','${r.new_id}')`).join(",\n");
 
   const out = join(STATE, "remap.sql");
   await writeFile(out, `-- Repoint photos at the copies now owned by the Workspace account.
@@ -373,19 +373,36 @@ where p.drive_file_id = m.old_id;`).join("\n\n");
 -- client AND you have reconnected Drive in Settings as the Workspace account.
 -- Running it earlier points the app at files its current token cannot read.
 --
--- Reversible: .migration/migration-map.jsonl holds both ids for every row.
+-- Reversible: .migration/migration-map.jsonl holds both ids for every row, so
+-- swapping the two columns below regenerates the inverse.
 
 begin;
 
-${body}
+create temp table _remap (old_id text primary key, new_id text not null) on commit drop;
 
--- Expect: ${rows.length}
-select count(*) as repointed from photos
-where drive_file_id in (${rows.slice(0, 1).map((r) => `'${r.new_id}'`).join(",")});
+insert into _remap (old_id, new_id) values
+${values};
+
+update photos p
+   set drive_file_id = r.new_id
+  from _remap r
+ where p.drive_file_id = r.old_id;
+
+-- Expect: repointed = ${rows.length}, still_on_old = 0, unaccounted = 0.
+-- "unaccounted" is photos whose drive_file_id matches neither side of the map;
+-- it should be zero because the keep-list came from this same photos table.
+select
+  (select count(*) from photos p join _remap r on p.drive_file_id = r.new_id) as repointed,
+  (select count(*) from photos p join _remap r on p.drive_file_id = r.old_id) as still_on_old,
+  (select count(*) from photos p
+     where p.drive_file_id is not null
+       and not exists (select 1 from _remap r where r.new_id = p.drive_file_id or r.old_id = p.drive_file_id)
+  ) as unaccounted;
 
 commit;
 `);
-  console.log(`Wrote ${out} — ${rows.length} photos in ${chunks.length} chunk(s).`);
+  console.log(`Wrote ${out} — ${rows.length} photos.`);
+  console.log(`Check the result row reads: repointed=${rows.length}, still_on_old=0, unaccounted=0`);
 }
 
 const cmd = process.argv[2];
