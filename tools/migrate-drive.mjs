@@ -289,8 +289,38 @@ async function copy() {
   const files = await listFolder(oldTok, cfg.oldFolderId);
   console.log(`Source folder holds ${files.length} files.`);
 
+  /* Deleting a photo in the app removes the row and deliberately LEAVES the
+     Drive file — the confirm dialog says so. Years of duplicate cleanups left
+     ~1,600 orphans, so the folder holds far more than the database references.
+     A keep-list (one drive_file_id per line, exported from `photos`) copies
+     only what is actually referenced. Without the file, everything is copied,
+     which is correct but wasteful. */
+  let keep = null;
+  const keepPath = join(STATE, "keep-ids.txt");
+  if (existsSync(keepPath)) {
+    keep = new Set((await readFile(keepPath, "utf8")).split("\n")
+      .map((l) => l.trim().replace(/^"|"$/g, ""))
+      .filter((l) => l && l !== "drive_file_id"));   // tolerate a CSV header
+    const present = new Set(files.map((f) => f.id));
+    // A referenced id with no file behind it is a photo that is ALREADY broken
+    // in the running app. Worth surfacing now rather than discovering it as a
+    // gap in the map afterwards.
+    const missing = [...keep].filter((id) => !present.has(id));
+    console.log(`Keep-list: ${keep.size} referenced by the database.`);
+    if (missing.length) {
+      await writeFile(join(STATE, "missing-from-drive.json"), JSON.stringify(missing, null, 2));
+      console.log(`  ⚠ ${missing.length} referenced id(s) have NO file in Drive — already broken in the app.`);
+      console.log(`     Written to .migration/missing-from-drive.json`);
+    }
+    const orphans = files.length - (keep.size - missing.length);
+    console.log(`  Skipping ${orphans} orphaned file(s) that no photo row references.`);
+  }
+
   const done = await readMap();
-  const todo = files.filter((f) => !done.has(f.id) && f.mimeType !== "application/vnd.google-apps.folder");
+  const todo = files.filter((f) =>
+    !done.has(f.id)
+    && f.mimeType !== "application/vnd.google-apps.folder"
+    && (!keep || keep.has(f.id)));
   console.log(`${done.size} already copied · ${todo.length} to go\n`);
 
   let ok = 0; const failed = [];
