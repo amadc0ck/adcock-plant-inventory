@@ -10,3 +10,6 @@ supabase/.temp/
 
 .DS_Store
 .vscode/
+
+# One-off Drive migration state — holds OAuth refresh tokens
+tools/.migration/
