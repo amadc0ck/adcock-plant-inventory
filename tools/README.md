@@ -49,7 +49,7 @@ Do not reorder these. Steps 1–3 change nothing that the live app depends on.
 
 3. **Authorise both sides.** Two browser consents, one per account.
    ```
-   node tools/migrate-drive.mjs auth-old   # amandamarienash@gmail.com
+   node tools/migrate-drive.mjs auth-old   # amdaoh@gmail.com
    node tools/migrate-drive.mjs auth-new   # me@justamanda.net
    ```
 

@@ -93,7 +93,7 @@ async function authorize(side) {
     scope: SCOPES, access_type: "offline", prompt: "consent",
   });
 
-  console.log(`\nSign in as the ${isOld ? "PERSONAL account — amandamarienash@gmail.com" : "WORKSPACE account — me@justamanda.net"}:\n\n${url}\n`);
+  console.log(`\nSign in as the ${isOld ? "PERSONAL account — amdaoh@gmail.com" : "WORKSPACE account — me@justamanda.net"}:\n\n${url}\n`);
   console.log(isOld
     ? "  (must be the Gmail account, using the OLD client id — that pair is the only\n   one Drive considers the creator of the existing files)\n"
     : "  (must be the Workspace account, using the NEW client id)\n");
