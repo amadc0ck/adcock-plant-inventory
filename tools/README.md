@@ -28,15 +28,30 @@ Do not reorder these. Steps 1–3 change nothing that the live app depends on.
    Also add `http://localhost:8910/callback` to **both** the old and the new
    client, so this script can authorise. Remove it afterwards.
 
-2. **Authorise both sides.** Two browser consents, one per account.
+2. **Put the credentials in a file, not the environment.**
    ```
-   export OLD_CLIENT_ID=… OLD_CLIENT_SECRET=… OLD_FOLDER_ID=…
-   export NEW_CLIENT_ID=… NEW_CLIENT_SECRET=…
+   cp tools/env.template tools/.migration/env
+   # fill it in — .migration/ is git-ignored
+   ```
+   The script loads that file itself. Keeping them out of `export` keeps them
+   out of shell history, and out of any transcript.
+
+3. **Authorise both sides.** Two browser consents, one per account.
+   ```
    node tools/migrate-drive.mjs auth-old   # amandamarienash@gmail.com
    node tools/migrate-drive.mjs auth-new   # amanda@justamanda.net
    ```
 
-3. **Copy and verify.** Resumable — re-run it after a failure and it skips what
+4. **Find the old folder id**, if you do not have it to hand. `supabase secrets
+   list` returns SHA-256 digests, not values, so `DRIVE_FOLDER_ID` cannot be
+   read back — but it does not need to be. Under `drive.file` the old client
+   sees only what it created, and the app created exactly one folder.
+   ```
+   node tools/migrate-drive.mjs find-folder
+   ```
+   Put the id in `.migration/env` as `OLD_FOLDER_ID`.
+
+5. **Copy and verify.** Resumable — re-run it after a failure and it skips what
    is already mapped. Every file is checksum-verified on both sides before it
    is recorded.
    ```
@@ -44,7 +59,7 @@ Do not reorder these. Steps 1–3 change nothing that the live app depends on.
    ```
    Nothing is written to Postgres. The app is unaffected throughout.
 
-4. **Cutover** (the only step with downtime, a few minutes):
+6. **Cutover** (the only step with downtime, a few minutes):
    ```
    supabase secrets set GOOGLE_OAUTH_CLIENT_ID=… GOOGLE_OAUTH_CLIENT_SECRET=… \
                         DRIVE_FOLDER_ID=<from .migration/new-folder-id.txt>
@@ -53,7 +68,7 @@ Do not reorder these. Steps 1–3 change nothing that the live app depends on.
    New uploads now land in the Workspace folder; historical photos are still
    pointing at the old ids and will not render yet. That is expected.
 
-5. **Repoint the database.**
+7. **Repoint the database.**
    ```
    node tools/migrate-drive.mjs sql     # writes .migration/remap.sql
    ```
@@ -61,8 +76,8 @@ Do not reorder these. Steps 1–3 change nothing that the live app depends on.
 
 ## Rollback
 
-Before step 5, rollback is: put the old secrets back and reconnect as the
-personal account. After step 5, `.migration/migration-map.jsonl` holds both ids
+Before step 7, rollback is: put the old secrets back and reconnect as the
+personal account. After step 7, `.migration/migration-map.jsonl` holds both ids
 for every row, so the update is reversible by swapping the columns in the
 generated SQL.
 

@@ -44,6 +44,19 @@ const LOOPBACK_PORT = 8910;
 const REDIRECT = `http://localhost:${LOOPBACK_PORT}/callback`;
 const SCOPES = "https://www.googleapis.com/auth/drive.file";
 
+/* Credentials come from .migration/env, which is git-ignored. Loading them from
+   a file rather than the environment keeps them out of shell history — and out
+   of any transcript, which is why they are never echoed back. */
+if (existsSync(join(STATE, "env"))) {
+  const txt = await readFile(join(STATE, "env"), "utf8");
+  for (const line of txt.split("\n")) {
+    const m = line.match(/^\s*(?:export\s+)?([A-Z_]+)\s*=\s*(.*)$/);
+    if (m && !line.trim().startsWith("#")) {
+      process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
+    }
+  }
+}
+
 const cfg = {
   oldClientId: process.env.OLD_CLIENT_ID,
   oldClientSecret: process.env.OLD_CLIENT_SECRET,
@@ -194,6 +207,32 @@ async function readMap() {
 }
 
 /* ---------- commands ---------- */
+/* DRIVE_FOLDER_ID lives in Supabase secrets, and `supabase secrets list` returns
+   SHA-256 digests rather than values — so the id cannot be read back. It does
+   not need to be: under drive.file the old client can only see what it created,
+   and the app created exactly one folder (REFERENCE §8, "the app creates its own
+   Drive folder via the API on first use"). So listing folders finds it. */
+async function findFolder() {
+  need("oldClientId", "oldClientSecret");
+  const tok = await accessToken("old");
+  const q = new URLSearchParams({
+    q: "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
+    fields: "files(id,name,createdTime)",
+  });
+  const r = await fetch(`https://www.googleapis.com/drive/v3/files?${q}`, { headers: { Authorization: `Bearer ${tok}` } });
+  const d = await r.json();
+  if (d.error) die(`List failed: ${d.error.message}`);
+  const folders = d.files || [];
+  if (!folders.length) die("The old client can see no folders. Wrong account, or the wrong (old) client id.");
+  console.log(`\nFolders visible to the OLD client (these are the ones it created):\n`);
+  for (const f of folders) {
+    const c = await fetch(`https://www.googleapis.com/drive/v3/files?${new URLSearchParams({ q: `'${f.id}' in parents and trashed = false`, fields: "files(id)", pageSize: "1000" })}`, { headers: { Authorization: `Bearer ${tok}` } });
+    const kids = ((await c.json()).files || []).length;
+    console.log(`  ${f.id}  ${f.name}  — ${kids} file(s)${kids >= 1000 ? "+" : ""}`);
+  }
+  console.log(`\nPut the one holding the photos in .migration/env as OLD_FOLDER_ID.`);
+}
+
 async function copy() {
   need("oldClientId", "oldClientSecret", "oldFolderId", "newClientId", "newClientSecret");
   const oldTok = await accessToken("old");
@@ -279,6 +318,7 @@ commit;
 const cmd = process.argv[2];
 if (cmd === "auth-old") await authorize("old");
 else if (cmd === "auth-new") await authorize("new");
+else if (cmd === "find-folder") await findFolder();
 else if (cmd === "copy") await copy();
 else if (cmd === "sql") await sql();
-else die("Usage: migrate-drive.mjs auth-old | auth-new | copy | sql");
+else die("Usage: migrate-drive.mjs auth-old | auth-new | find-folder | copy | sql");
