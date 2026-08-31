@@ -16,7 +16,15 @@ const FIELDS: Record<string, string> = {
   growth_habit: "Exactly one of: columnar, globular, rosette, clumping, caudiciform, trailing, mounding, upright, climbing, groundcover, solitary",
   mature_size: "Height and spread in feet or inches, e.g. \"3-4 ft tall x 2 ft wide\"",
   bloom_season: "Exactly one of: spring, early_summer, summer, late_summer, fall, winter, intermittent, monocarpic, not_observed",
-  origin: "Exactly one of: native, introduced, unknown. Relative to the San Francisco Bay Area, California. Almost every succulent here is introduced.",
+  /* The old text ended "Almost every succulent here is introduced", which
+     handed Claude the answer before it looked at the plant and made the field
+     unfalsifiable — every taxon came back `introduced`, including the ones
+     genuinely native to California. Amanda spotted it 2026-08-30.
+
+     The prior was not even wrong on the facts (most of a succulent collection
+     in Concord IS introduced); it was wrong as a method, because it removed
+     any reason to check the handful that are not. */
+  origin: "Is this taxon NATIVE TO CALIFORNIA / the San Francisco Bay Area, where this garden is? Exactly one of: native, introduced, unknown. Decide it from the taxon's own wild distribution, the same knowledge you would use for native_range: if its natural range includes California, answer native; if it is from Mexico, South Africa, Madagascar, the Canary Islands, South America or elsewhere, answer introduced; a garden hybrid with no wild range is introduced. Check rather than assume — Dudleya, several Sedum (e.g. spathulifolium), some Opuntia and some Yucca are genuinely native here. This field is NOT about whether the plant is a wild species or a human-made cultivar; that is is_hybrid and parentage.",
   native_range: "Where the species occurs in the wild, e.g. \"Canary Islands\". For a garden hybrid say so.",
   hardy_to: "Lowest USDA zone or temperature it survives, e.g. \"Zone 9\" or \"25F\"",
   water_needs: "Exactly one of: low, moderate, high",
