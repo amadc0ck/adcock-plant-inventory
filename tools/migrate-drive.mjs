@@ -268,9 +268,10 @@ async function findFolder() {
   if (!folders.length) die("The old client can see no folders. Wrong account, or the wrong (old) client id.");
   console.log(`\nFolders visible to the OLD client (these are the ones it created):\n`);
   for (const f of folders) {
-    const c = await fetch(`https://www.googleapis.com/drive/v3/files?${new URLSearchParams({ q: `'${f.id}' in parents and trashed = false`, fields: "files(id)", pageSize: "1000" })}`, { headers: { Authorization: `Bearer ${tok}` } });
-    const kids = ((await c.json()).files || []).length;
-    console.log(`  ${f.id}  ${f.name}  — ${kids} file(s)${kids >= 1000 ? "+" : ""}`);
+    // Paginated. Reading a single page reported "1000+" for a folder of 2,600,
+    // which is the number we later check the copy against — so it has to be real.
+    const kids = (await listFolder(tok, f.id)).length;
+    console.log(`  ${f.id}  ${f.name}  — ${kids} file(s)`);
   }
   console.log(`\nPut the one holding the photos in .migration/env as OLD_FOLDER_ID.`);
 }
