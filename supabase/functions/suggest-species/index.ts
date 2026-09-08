@@ -24,7 +24,6 @@ const FIELDS: Record<string, string> = {
      The prior was not even wrong on the facts (most of a succulent collection
      in Concord IS introduced); it was wrong as a method, because it removed
      any reason to check the handful that are not. */
-  origin: "Is this taxon NATIVE TO CALIFORNIA / the San Francisco Bay Area, where this garden is? Exactly one of: native, introduced, unknown. Decide it from the taxon's own wild distribution, the same knowledge you would use for native_range: if its natural range includes California, answer native; if it is from Mexico, South Africa, Madagascar, the Canary Islands, South America or elsewhere, answer introduced; a garden hybrid with no wild range is introduced. Check rather than assume — Dudleya, several Sedum (e.g. spathulifolium), some Opuntia and some Yucca are genuinely native here. This field is NOT about whether the plant is a wild species or a human-made cultivar; that is is_hybrid and parentage.",
   native_range: "Where the species occurs in the wild, e.g. \"Canary Islands\". For a garden hybrid say so.",
   hardy_to: "Lowest USDA zone or temperature it survives, e.g. \"Zone 9\" or \"25F\"",
   water_needs: "Exactly one of: low, moderate, high",
@@ -35,20 +34,29 @@ const FIELDS: Record<string, string> = {
   // array in between.
   light_conditions: "Light this plant wants. One or more of: direct, indirect, partial, full, shade, morning, afternoon, all_day. Separate several with a semicolon, e.g. \"direct; morning\".",
   // Hybrid-only, gated below — see HYBRID_ONLY.
-  parentage: "The two parent taxa of this hybrid or cultivar, e.g. \"Echeveria gibbiflora \u00D7 Echeveria elegans\". Null unless you actually know the recorded cross.",
   is_hybrid: "true if this is a hybrid, false otherwise",
 };
 
-/* v2.8.0. Measured against Amanda's collection: 132 of 133 taxa had no
-   parentage, and for most that is CORRECT — Mammillaria elongata is a straight
-   species and has no cross to record. Asking anyway would have produced a
-   hundred "unknown" suggestions to dismiss.
+/* v2.8.0, narrowed to one field by PROF-3. Only asked when the record looks
+   like a hybrid: a named cultivar, an is_hybrid flag already set, or a
+   nothogeneric name. `parentage` was the other member and is gone — see below. */
+const HYBRID_ONLY = ["is_hybrid"];
 
-   So these two are only asked when the record looks like a hybrid: a named
-   cultivar, an is_hybrid flag already set, or a nothogeneric name. Her
-   Graptoveria, Graptosedum, Pachyveria and xPachyveria are all intergeneric
-   crosses and are exactly the rows where parentage is worth having. */
-const HYBRID_ONLY = ["parentage", "is_hybrid"];
+/* PROF-3, 2026-09-08. `parentage` was dropped from the asked set entirely, and
+   `origin` with it — the latter no longer exists as a column (ORIG-1).
+
+   Parentage was blank on 35 of the 43 hybrid-ish taxa, and AI-4 established
+   why: most succulent genera have NO cultivar registration authority, so for a
+   large share of them there is no recorded cross that exists to be found. The
+   v2.8.0 note below was right that a straight species has no parentage; what it
+   missed is that most CULTIVARS do not have a findable one either. Asking
+   forever for a fact that does not exist is what turned "Species profiles
+   unfinished" into a number that could not move.
+
+   `species_epithet` is now skipped for a taxon with a cultivar (see the blank
+   test) — a cultivar has no epithet, which FIELDS has always said and the blank
+   test never honoured. */
+const CULTIVAR_EXEMPT = ["species_epithet"];
 const NOTHOGENERA = new Set([
   "graptoveria", "graptosedum", "pachyveria", "sedeveria", "cremneria",
   "mangave", "gasteraloe", "gastrolea", "alworthia",
@@ -61,12 +69,10 @@ function looksHybrid(t: Record<string, unknown>): boolean {
   return NOTHOGENERA.has(g.toLowerCase().replace(/^[x\u00D7]/i, ""));
 }
 
-/* A value that is present but says nothing. `origin` defaults to "unknown" on
-   every taxon, so the blank test below counted all 133 as answered and Claude
-   was never asked — which read as "Claude will not set origin". It was never
-   given the chance. Treated as blank; a suggestion is still hers to accept. */
+/* A value that is present but says nothing, so the blank test must treat it as
+   absent or Claude is never asked. `origin: ["unknown"]` lived here until
+   ORIG-1 removed the column. */
 const SENTINELS: Record<string, string[]> = {
-  origin: ["unknown"],
   bloom_season: ["not_observed"],
 };
 
@@ -88,8 +94,13 @@ export default {
     // Only ever the blanks. Anything she has filled in is hers, and asking
     // about it would invite a suggestion to overwrite a fact she established.
     const hybridish = looksHybrid(t as Record<string, unknown>);
+    const hasCultivar = !!(t.cultivar && String(t.cultivar).trim());
     const blank = Object.keys(FIELDS).filter((f) => {
       if (HYBRID_ONLY.includes(f) && !hybridish) return false;
+      // A cultivar has no species epithet. FIELDS says so in its own
+      // description and the test ignored it, so every cultivar was asked for
+      // one and counted incomplete forever when none came back.
+      if (CULTIVAR_EXEMPT.includes(f) && hasCultivar) return false;
       const v = (t as Record<string, unknown>)[f];
       if (f === "frost_tender" || f === "is_hybrid") return v === null || v === undefined;
       if (Array.isArray(v)) return v.length === 0;
