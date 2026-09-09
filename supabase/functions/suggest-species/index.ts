@@ -32,6 +32,9 @@ const FIELDS: Record<string, string> = {
   // a semicolon-separated string and the app splits it back into an array on
   // accept — suggestions.value_text is text, so there is nowhere to put a real
   // array in between.
+  container_suitability: "Will this do better in a CONTAINER or IN THE GROUND, for a garden in Concord, California (USDA 9b)? Exactly one of: container, either, ground. Answer from mature size, root depth and how much it resents disturbance — an Agave americana reaching 6ft wants ground, an Echeveria is happy in a pot, most mid-sized succulents are either. This is about where it grows best, NOT about frost protection; that is frost_tender.",
+  soil_needs: "The soil or mix this wants, in a short phrase. e.g. \"Fast-draining cactus mix; tolerates poor sandy soil\" or \"Gritty, low-organic, never wet in winter\". Say what matters for keeping it alive, not a recipe.",
+  feeding_needs: "How to feed it, in a short phrase. e.g. \"Dilute balanced feed monthly in growth, none in winter\" or \"Rarely needs feeding\". Null if you do not know.",
   light_conditions: "Light this plant wants. One or more of: direct, indirect, partial, full, shade, morning, afternoon, all_day. Separate several with a semicolon, e.g. \"direct; morning\".",
   // Hybrid-only, gated below — see HYBRID_ONLY.
   is_hybrid: "true if this is a hybrid, false otherwise",
