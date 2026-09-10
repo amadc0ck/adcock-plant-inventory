@@ -15,7 +15,13 @@ const FIELDS: Record<string, string> = {
   plant_type: "Exactly one of: cactus, aeonium, agave, aloe, cotyledon, crassula, curio, dracaena, echeveria, euphorbia, haworthia, haworthiopsis, hoya, kalanchoe, lithops, portulacaria, sedum, sempervivum, senecio",
   growth_habit: "Exactly one of: columnar, globular, rosette, clumping, caudiciform, trailing, mounding, upright, climbing, groundcover, solitary",
   mature_size: "Height and spread in feet or inches, e.g. \"3-4 ft tall x 2 ft wide\"",
-  bloom_season: "Exactly one of: spring, early_summer, summer, late_summer, fall, winter, intermittent, monocarpic, not_observed",
+  bloom_season: "When this flowers. One or more of: spring, early_summer, summer, late_summer, fall, winter. Separate several with a semicolon, e.g. \"spring; early_summer\" for a plant flowering from late spring into early summer. Null if it has no seasonal bloom — say why in bloom_habit instead.",
+  // BLOOM-2. `not_observed` used to be a bloom_season value AND a sentinel the
+  // app counted as blank, so Claude could answer it, Amanda could accept it,
+  // and the field stayed a gap forever. Six species cycled that way. It is a
+  // habit value now and NOT offered here: whether anyone has seen a plant
+  // bloom in her garden is not something this model can know.
+  bloom_habit: "Only when there is no seasonal answer. One of: intermittent (flowers on and off through the year), monocarpic (flowers once, then the plant dies), rarely (rarely or never flowers in cultivation — true of many columnar cacti, Euphorbia trigona, Portulacaria afra). Null if it does have a normal seasonal bloom. Do NOT answer whether it has been observed blooming; that is the owner's record, not yours.",
   /* The old text ended "Almost every succulent here is introduced", which
      handed Claude the answer before it looked at the plant and made the field
      unfalsifiable — every taxon came back `introduced`, including the ones
@@ -72,12 +78,19 @@ function looksHybrid(t: Record<string, unknown>): boolean {
   return NOTHOGENERA.has(g.toLowerCase().replace(/^[x\u00D7]/i, ""));
 }
 
-/* A value that is present but says nothing, so the blank test must treat it as
-   absent or Claude is never asked. `origin: ["unknown"]` lived here until
-   ORIG-1 removed the column. */
-const SENTINELS: Record<string, string[]> = {
-  bloom_season: ["not_observed"],
-};
+/* EMPTY since BLOOM-2. A sentinel is a value that is present but says nothing,
+   so the blank test has to treat it as absent — and both entries that ever
+   lived here were values CLAUDE COULD RETURN. That is a closed loop: the model
+   satisfies the prompt, the answer is accepted, and the field still counts as
+   blank, so the same species comes back in the next batch. Six did, on
+   `bloom_season: not_observed`.
+
+   `origin: ["unknown"]` went with the column (ORIG-1); `not_observed` is a
+   bloom_habit value now, which is a real answer.
+
+   **If a sentinel is ever needed again, it must not be offerable to Claude.**
+   Prefer null: an absent answer is honestly blank and stays visible as work. */
+const SENTINELS: Record<string, string[]> = {};
 
 export default {
   fetch: withSupabase({ auth: "user" }, async (req, ctx) => {
@@ -104,6 +117,13 @@ export default {
       // description and the test ignored it, so every cultivar was asked for
       // one and counted incomplete forever when none came back.
       if (CULTIVAR_EXEMPT.includes(f) && hasCultivar) return false;
+      // Mirrors TAXON_ANSWERED_BY in index.html: a habit answers the season,
+      // and a plant WITH seasons needs no habit. Asking for both invites a
+      // contradiction Amanda would then have to adjudicate.
+      const seasons = Array.isArray(t.bloom_season) ? t.bloom_season : [];
+      const habit = String(t.bloom_habit || "").trim();
+      if (f === "bloom_season" && habit) return false;
+      if (f === "bloom_habit" && seasons.length) return false;
       const v = (t as Record<string, unknown>)[f];
       if (f === "frost_tender" || f === "is_hybrid") return v === null || v === undefined;
       if (Array.isArray(v)) return v.length === 0;
