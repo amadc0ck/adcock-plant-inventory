@@ -15,7 +15,7 @@ const FIELDS: Record<string, string> = {
   plant_type: "Exactly one of: cactus, aeonium, agave, aloe, cotyledon, crassula, curio, dracaena, echeveria, euphorbia, haworthia, haworthiopsis, hoya, kalanchoe, lithops, portulacaria, sedum, sempervivum, senecio",
   growth_habit: "Exactly one of: columnar, globular, rosette, clumping, caudiciform, trailing, mounding, upright, climbing, groundcover, solitary",
   mature_size: "Height and spread in feet or inches, e.g. \"3-4 ft tall x 2 ft wide\"",
-  bloom_season: "When this flowers. One or more of: spring, early_summer, summer, late_summer, fall, winter. Separate several with a semicolon, e.g. \"spring; early_summer\" for a plant flowering from late spring into early summer. Null if it has no seasonal bloom — say why in bloom_habit instead.",
+  bloom_season: "When this flowers. One or more of: early_spring, spring, late_spring, early_summer, summer, late_summer, early_fall, fall, late_fall, early_winter, winter, late_winter. Separate several with a semicolon, e.g. \"late_spring; early_summer\" for a plant flowering from late spring into early summer. Prefer the broad label (spring, summer, fall, winter) unless the timing is genuinely at an edge of the season. Null if it has no seasonal bloom — say why in bloom_habit instead.",
   // BLOOM-2. `not_observed` used to be a bloom_season value AND a sentinel the
   // app counted as blank, so Claude could answer it, Amanda could accept it,
   // and the field stayed a gap forever. Six species cycled that way. It is a
