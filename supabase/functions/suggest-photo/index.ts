@@ -62,8 +62,21 @@ export default {
       "## Locations",
       ...cx.locations.map((l) =>
         `${l.id} | ${l.path}${l.holds_plants ? " | holds plants" : " | area, holds no plants directly"}${l.archive ? " | ARCHIVE, a former home" : ""}${l.period ? ` | ${l.period}` : ""}`),
-      cx.corrections.length ? "\n## Recent decisions by the collection owner — learn from these\n" + cx.corrections.join("\n") : "",
     ].join("\n");
+
+    /* CACHE-1 (b). **This used to be the last element of the catalogue above,
+       and it is the most volatile thing in the request.** The 20 most recent
+       accepted/dismissed suggestions change every time Amanda accepts or
+       dismisses one — which is exactly what she does while working a batch —
+       so each review invalidated the entire 15,000-token cached prefix and the
+       next call re-paid for all of it.
+
+       It belongs in the user turn: ~600 tokens at full price on every call,
+       instead of re-buying 15,000. The examples still reach the model; they
+       just stop dragging the catalogue with them. */
+    const recentDecisions = cx.corrections.length
+      ? "\n\n## Recent decisions by the collection owner — learn from these\n" + cx.corrections.join("\n")
+      : "";
 
     const dated = photo.taken_at ? String(photo.taken_at).slice(0, 10) : null;
 
@@ -138,7 +151,8 @@ export default {
       ` "confidence": "high|medium|low"}`,
     ].filter(Boolean).join("\n");
 
-    const task = locationOnly ? locationTask : healthOnly ? healthTask : fullTask;
+    // CACHE-1 (b). Appended to the USER turn, never to the cached system block.
+    const task = (locationOnly ? locationTask : healthOnly ? healthTask : fullTask) + recentDecisions;
 
     let parsed: Record<string, unknown>;
     let claudeData: Record<string, unknown>;

@@ -39,9 +39,15 @@ function holdsPlants(l: Record<string, unknown>): boolean {
 
 export async function buildContext(db: Db): Promise<AbgContext> {
   const [taxaRes, plantsRes, locsRes] = await Promise.all([
-    db.from("taxa").select("id,botanical_name,common_name,genus,species_epithet,cultivar,is_hybrid,working_label"),
-    db.from("plants").select("id,accession_number,taxa_id,location_id,status"),
-    db.from("locations").select("id,name,parent_location_id,type,holds_plants,gallery_row,archived,active_from,active_to,locality"),
+    /* CACHE-1 (a). **Ordered because the cache is prefix-matched on bytes.**
+       Without an ORDER BY these come back in heap order, and Postgres moves an
+       updated row to the END of the heap — so editing one plant silently
+       reshuffles the catalogue and costs the whole 15,000-token block. Ordering
+       by `id` is arbitrary but stable, which is the only property that matters
+       here; every derived list below inherits it. */
+    db.from("taxa").select("id,botanical_name,common_name,genus,species_epithet,cultivar,is_hybrid,working_label").order("id"),
+    db.from("plants").select("id,accession_number,taxa_id,location_id,status").order("id"),
+    db.from("locations").select("id,name,parent_location_id,type,holds_plants,gallery_row,archived,active_from,active_to,locality").order("id"),
   ]);
 
   // Past decisions, fed back as examples. Kept out of the Promise.all and
@@ -141,6 +147,26 @@ export async function callClaude(body: unknown) {
   });
   const data = await resp.json();
   if (!resp.ok) throw new Error(data.error?.message || "Claude request failed");
+
+  /* CACHE-1 (c). `usage` was read by nobody, so every claim about the prompt
+     cache — including the 10x cost figure that justified this work — was
+     INFERRED. One line makes it measurable in the Supabase function logs.
+     Logged here rather than at the call sites so a future caller cannot forget.
+
+       cache_creation_input_tokens  the block was WRITTEN (a miss, paid at 1.25x)
+       cache_read_input_tokens      the block was READ   (a hit,  paid at 0.1x)
+
+     A healthy batch is one write on the first call and a read on every call
+     after. Two consecutive writes means the prefix changed between them. */
+  const u = (data.usage || {}) as Record<string, number>;
+  console.log(JSON.stringify({
+    evt: "claude_usage",
+    model: (body as { model?: string })?.model ?? null,
+    input: u.input_tokens ?? null,
+    output: u.output_tokens ?? null,
+    cache_write: u.cache_creation_input_tokens ?? 0,
+    cache_read: u.cache_read_input_tokens ?? 0,
+  }));
   return data;
 }
 
