@@ -76,3 +76,10 @@ enabled = true
 verify_jwt = false
 import_map = "./functions/suggest-species/deno.json"
 entrypoint = "./functions/suggest-species/index.ts"
+
+# justamanda.net journal feed. Public: RLS on posts, not a JWT, decides what it shows.
+[functions.rss]
+enabled = true
+verify_jwt = false
+import_map = "./functions/rss/deno.json"
+entrypoint = "./functions/rss/index.ts"
