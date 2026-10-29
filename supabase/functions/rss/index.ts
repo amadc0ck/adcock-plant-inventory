@@ -46,7 +46,9 @@ const absolutiseHtml = (html: string) =>
 const imageType = (u: string) =>
   /\.png($|\?)/i.test(u) ? "image/png" : /\.webp($|\?)/i.test(u) ? "image/webp" : "image/jpeg";
 
-const postUrl = (slug: string) => `${SITE}/post.html?slug=${encodeURIComponent(slug)}`;
+// Each post's static page, written by justamanda.net's tools/build-journal.mjs.
+// A post newer than the last build still resolves there via 404.html.
+const postUrl = (slug: string) => `${SITE}/journal/${encodeURIComponent(slug)}/`;
 
 Deno.serve(async () => {
   const base = Deno.env.get("SUPABASE_URL")!;
